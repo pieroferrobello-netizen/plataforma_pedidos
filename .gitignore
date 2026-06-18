@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+credenciales.json
+.streamlit/secrets.toml
+~$*.xlsx
+.vscode/

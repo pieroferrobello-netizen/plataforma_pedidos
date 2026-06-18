@@ -1,0 +1,8 @@
+streamlit
+supabase
+pandas
+openpyxl
+plotly
+gspread
+oauth2client
+python-escpos
