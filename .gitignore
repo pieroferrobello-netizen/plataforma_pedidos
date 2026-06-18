@@ -4,3 +4,4 @@ credenciales.json
 .streamlit/secrets.toml
 ~$*.xlsx
 .vscode/
+MEMORY.md
