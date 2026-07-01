@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import re
+from datetime import date as _date, timedelta as _timedelta
 from supabase import create_client
 
 # ── Supabase ─────────────────────────────────────────────────────────────────
@@ -105,14 +106,22 @@ def mostrar_dashboard(df_ventas):
     df = df_ventas.copy()
     df['Total']          = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
     df['Fecha_Completa'] = pd.to_datetime(df['Fecha'], errors='coerce')
-    df['Fecha_Corta']    = df['Fecha_Completa'].dt.date
+    # Extraer fecha igual que cierre de caja (primeros 10 chars del string crudo)
+    # evita que timezone offsets desplacen la fecha al día siguiente
+    df['Fecha_Corta']    = pd.to_datetime(
+        df['Fecha'].astype(str).str.slice(0, 10), errors='coerce'
+    ).dt.date
     df['Hora']           = df['Fecha_Completa'].dt.hour
     df = df.dropna(subset=['Fecha_Corta'])
-    df = df[(df['Hora'] >= 18) | (df['Hora'] < 6)]
 
-    if df.empty:
-        st.error("No hay ventas en el horario de atención (18:00 en adelante).")
-        return
+    df['_Año']    = df['Fecha_Corta'].apply(lambda d: d.year)
+    df['_Mes']    = df['Fecha_Corta'].apply(lambda d: d.month)
+    df['_Dia']    = df['Fecha_Corta'].apply(lambda d: d.day)
+    # Semana dentro del mes con límite Lun-Dom
+    def _sem(d):
+        primer = _date(d.year, d.month, 1)
+        return (d.day + primer.weekday() - 1) // 7 + 1
+    df['_Semana'] = df['Fecha_Corta'].apply(_sem)
 
     def macro(tipo):
         if tipo == 'Mesa': return 'Mesa'
@@ -133,27 +142,55 @@ def mostrar_dashboard(df_ventas):
     df['Bloque'] = df['Hora'].apply(bloque)
 
     # ── FILTROS ───────────────────────────────────────────────────────────────
-    min_d, max_d = df['Fecha_Corta'].min(), df['Fecha_Corta'].max()
-    fc1, fc2, fc3, fc4 = st.columns([1.6, 1, 1, 1])
-    with fc1:
-        rango = st.date_input("📅  Rango de fechas", [min_d, max_d],
-                              min_value=min_d, max_value=max_d)
-    with fc2:
+    MESES_ES = {1:'Enero',2:'Febrero',3:'Marzo',4:'Abril',5:'Mayo',6:'Junio',
+                7:'Julio',8:'Agosto',9:'Septiembre',10:'Octubre',11:'Noviembre',12:'Diciembre'}
+
+    años_disp = sorted(df['_Año'].dropna().unique().tolist(), reverse=True)
+    fa1, fa2, fa3, fa4, fa5, fa6 = st.columns([0.6, 0.9, 0.8, 0.9, 1.1, 1.1])
+
+    with fa1:
+        f_año = st.selectbox("📅 Año", [str(a) for a in años_disp], index=0)
+    f_año = int(f_año)
+
+    df_año = df[df['_Año'] == f_año]
+    meses_disp = sorted(df_año['_Mes'].dropna().unique().tolist())
+    mes_opciones = ["Todos"] + [MESES_ES[m] for m in meses_disp]
+
+    with fa2:
+        f_mes_str = st.selectbox("Mes", mes_opciones, index=0)
+
+    if f_mes_str == "Todos":
+        f_mes_num = None
+        df_mes    = df_año
+        sem_opciones = ["Todas"]
+    else:
+        f_mes_num    = next(k for k, v in MESES_ES.items() if v == f_mes_str)
+        df_mes       = df_año[df_año['_Mes'] == f_mes_num]
+        sems_disp    = sorted(df_mes['_Semana'].dropna().unique().tolist())
+        sem_opciones = ["Todas"] + [f"Semana {s}" for s in sems_disp]
+
+    with fa3:
+        f_sem_str = st.selectbox("Semana", sem_opciones, index=0)
+
+    with fa4:
         canales   = df['Canal'].unique().tolist()
         f_canal   = st.multiselect("Canal", canales, default=canales)
-    with fc3:
+    with fa5:
         clientes  = sorted(df['Cliente'].dropna().astype(str).unique())
         f_cliente = st.multiselect("Cliente", clientes)
-    with fc4:
+    with fa6:
         items_cl  = extraer_texto_limpio(", ".join(df['Items'].dropna().astype(str)))
         EXCL      = ['ENSALADA', 'ARROZ', 'PAPA', 'YUCA', 'CREMA']
         prods_fil = sorted({p.strip() for p in items_cl.split(',')
                             if p.strip() and not any(e in p.upper() for e in EXCL)})
         f_prod    = st.multiselect("Producto", prods_fil)
 
-    df_f = df.copy()
-    if len(rango) == 2:
-        df_f = df_f[(df_f['Fecha_Corta'] >= rango[0]) & (df_f['Fecha_Corta'] <= rango[1])]
+    df_f = df[df['_Año'] == f_año].copy()
+    if f_mes_num is not None:
+        df_f = df_f[df_f['_Mes'] == f_mes_num]
+    if f_sem_str != "Todas":
+        f_sem_num = int(f_sem_str.split()[1])
+        df_f = df_f[df_f['_Semana'] == f_sem_num]
     if f_canal:
         df_f = df_f[df_f['Canal'].isin(f_canal)]
     if f_cliente:
@@ -165,6 +202,7 @@ def mostrar_dashboard(df_ventas):
     if df_f.empty:
         st.info("No hay datos para los filtros seleccionados.")
         return
+
 
     # ── KPIs ──────────────────────────────────────────────────────────────────
     total_ing   = df_f['Total'].sum()
@@ -197,140 +235,147 @@ def mostrar_dashboard(df_ventas):
     html += "</div>"
     st.html(html)
 
-    # ── TENDENCIA + BLOQUES HORARIOS ──────────────────────────────────────────
-    _sec("chart-area", "Tendencia e Horarios")
-    c1, c2 = st.columns(2)
+    # ── TENDENCIA + DÍA DE SEMANA ─────────────────────────────────────────────
+    _sec("chart-area", "Tendencia de Ingresos")
+    c1, c2 = st.columns([3, 2])
 
     with c1:
-        df_tend = df_f.groupby('Fecha_Corta')['Total'].sum().reset_index()
-        fig = go.Figure(go.Scatter(
-            x=df_tend['Fecha_Corta'], y=df_tend['Total'],
-            mode='lines+markers',
-            line=dict(color=_RED, width=2),
-            fill='tozeroy', fillcolor='rgba(230,57,70,0.10)',
-            marker=dict(color=_RED, size=5, line=dict(color='#7d0610', width=1)),
+        if f_mes_num is None:
+            # Sin filtro de mes → agrupar por mes
+            df_f['_MesOrd'] = df_f['Fecha_Corta'].apply(lambda d: d.year * 100 + d.month)
+            df_f['_MesStr'] = df_f['Fecha_Corta'].apply(
+                lambda d: f"{MESES_ES[d.month][:3]} {d.year}")
+            df_tend = (df_f.groupby(['_MesOrd', '_MesStr'])
+                       .agg(Total=('Total','sum'), Pedidos=('Total','count'))
+                       .reset_index().sort_values('_MesOrd'))
+            x_vals   = df_tend['_MesStr'].tolist()
+            titulo_c = "Ingresos Mensuales"
+            lbl_desg = 'Mes'
+        else:
+            # Con filtro de mes → agrupar por día
+            df_tend = (df_f.groupby('Fecha_Corta')
+                       .agg(Total=('Total','sum'), Pedidos=('Total','count'))
+                       .reset_index().sort_values('Fecha_Corta'))
+            df_tend['Fecha_str'] = df_tend['Fecha_Corta'].astype(str).str.slice(5)
+            x_vals   = df_tend['Fecha_str'].tolist()
+            titulo_c = "Ingresos Diarios"
+            lbl_desg = 'Fecha'
+
+        fig = go.Figure(go.Bar(
+            x=x_vals, y=df_tend['Total'],
+            marker_color=_RED,
+            text=df_tend['Total'].apply(lambda v: f"S/{v:,.0f}"),
+            textposition='outside',
+            textfont=dict(color='#8b949e', family='Outfit', size=9),
             hovertemplate='<b>%{x}</b><br>S/ %{y:,.2f}<extra></extra>',
         ))
-        fig.update_xaxes(tickformat="%d %b")
+        fig.update_xaxes(tickangle=-45)
         fig.update_yaxes(tickprefix="S/ ")
-        st.plotly_chart(_dark(fig, "Ingresos Diarios"), use_container_width=True)
+        fig.update_layout(uniformtext_minsize=7, uniformtext_mode='hide')
+        st.plotly_chart(_dark(fig, titulo_c), use_container_width=True)
+
 
     with c2:
-        df_bloq = (df_f.groupby('Bloque').size().reset_index(name='Pedidos')
-                   .assign(Bloque=lambda d: pd.Categorical(d['Bloque'], categories=ORDEN_BLOQUES, ordered=True))
-                   .sort_values('Bloque'))
-        fig = px.bar(df_bloq, x='Bloque', y='Pedidos', text_auto=True,
-                     color='Pedidos',
-                     color_continuous_scale=[[0,'#3d0709'],[0.5,'#a50d1a'],[1,_RED]])
-        fig.update_traces(textfont=dict(color='#e6edf3', family='Outfit'),
+        DIAS_ES    = {0:'Lun',1:'Mar',2:'Mié',3:'Jue',4:'Vie',5:'Sáb',6:'Dom'}
+        ORDEN_DIAS = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
+        df_f['DiaSemana'] = df_f['Fecha_Corta'].apply(lambda d: DIAS_ES[d.weekday()])
+        df_dias = (df_f.groupby('DiaSemana')['Total'].sum().reset_index()
+                   .assign(DiaSemana=lambda d: pd.Categorical(d['DiaSemana'], categories=ORDEN_DIAS, ordered=True))
+                   .sort_values('DiaSemana'))
+        fig = px.bar(df_dias, x='DiaSemana', y='Total', text_auto='.2s',
+                     color='Total',
+                     color_continuous_scale=[[0,'#0d2137'],[0.5,'#1a5276'],[1,'#58a6ff']])
+        fig.update_traces(textfont=dict(color='#e6edf3', family='Outfit', size=10),
                           marker_line_width=0)
         fig.update_coloraxes(showscale=False)
         fig.update_xaxes(title_text="")
-        fig.update_yaxes(title_text="Pedidos")
-        st.plotly_chart(_dark(fig, "Pedidos por Bloque Horario"), use_container_width=True)
+        fig.update_yaxes(tickprefix="S/ ", title_text="")
+        st.plotly_chart(_dark(fig, "Ingresos por Día de Semana"), use_container_width=True)
 
-    # ── CANAL + TOP CLIENTES ──────────────────────────────────────────────────
-    _sec("chart-pie", "Canales y Clientes")
-    c3, c4 = st.columns(2)
+    # ── OPERACIONES: BLOQUES · CANAL · PAGOS ──────────────────────────────────
+    _sec("sliders", "Operaciones")
+    c3, c4, c5 = st.columns(3)
 
     with c3:
-        df_canal = df_f.groupby('Canal')['Total'].sum().reset_index()
-        colores  = {'Mesa': _RED, 'Call Center': '#58a6ff', 'Otros': '#30363d'}
-        fig = px.pie(df_canal, values='Total', names='Canal', hole=0.55,
-                     color='Canal', color_discrete_map=colores)
-        fig.update_traces(
-            textposition='inside', textinfo='percent+label',
-            textfont=dict(color='#ffffff', family='Outfit', size=12),
-            marker=dict(line=dict(color=_BG, width=3)),
-            hovertemplate='<b>%{label}</b><br>S/ %{value:,.2f}<br>%{percent}<extra></extra>',
-        )
-        st.plotly_chart(_dark(fig, "Distribución por Canal"), use_container_width=True)
+        df_bloq = (df_f[df_f['Bloque'] != 'Otros'].groupby('Bloque').size().reset_index(name='Pedidos')
+                   .assign(Bloque=lambda d: pd.Categorical(d['Bloque'], categories=ORDEN_BLOQUES, ordered=True))
+                   .sort_values('Bloque'))
+        fig = px.bar(df_bloq, x='Pedidos', y='Bloque', orientation='h',
+                     text_auto=True,
+                     color='Pedidos',
+                     color_continuous_scale=[[0,'#0d2137'],[0.5,'#1a5276'],[1,'#58a6ff']])
+        fig.update_traces(textfont=dict(color='#e6edf3', family='Outfit', size=11),
+                          marker_line_width=0)
+        fig.update_coloraxes(showscale=False)
+        fig.update_xaxes(title_text="Pedidos")
+        fig.update_yaxes(title_text="", autorange='reversed')
+        st.plotly_chart(_dark(fig, "Pedidos por Horario"), use_container_width=True)
 
     with c4:
-        mask_anon = df_f['Cliente'].str.contains('SALON|CB000|CLIENTE', case=False, na=False)
-        df_top = (df_f[~mask_anon].groupby('Cliente')['Total'].sum()
-                  .reset_index().sort_values('Total', ascending=True).tail(5))
-        if not df_top.empty:
-            fig = px.bar(df_top, x='Total', y='Cliente', orientation='h',
-                         text_auto='.2s', color_discrete_sequence=[_RED])
-            fig.update_traces(textfont=dict(color='#e6edf3', family='Outfit'),
-                              marker_line_width=0,
-                              hovertemplate='<b>%{y}</b><br>S/ %{x:,.2f}<extra></extra>')
-            fig.update_xaxes(tickprefix="S/ ", title_text="Monto Total (S/)")
-            fig.update_yaxes(title_text="")
-            st.plotly_chart(_dark(fig, "Top 5 Clientes"), use_container_width=True)
-        else:
-            st.info("No hay datos suficientes de clientes nominados.")
+        df_canal = df_f.groupby('Canal')['Total'].sum().reset_index()
+        fig = px.pie(df_canal, values='Total', names='Canal', hole=0.55,
+                     color='Canal',
+                     color_discrete_map={'Mesa': _RED, 'Call Center': '#58a6ff', 'Otros': '#30363d'})
+        fig.update_traces(
+            textposition='inside', textinfo='percent+label',
+            textfont=dict(color='#ffffff', family='Outfit', size=11),
+            marker=dict(line=dict(color=_BG, width=3)),
+            hovertemplate='<b>%{label}</b><br>S/ %{value:,.2f}<extra></extra>',
+        )
+        st.plotly_chart(_dark(fig, "Canal de Venta"), use_container_width=True)
 
-    # ── MÉTODOS DE PAGO ────────────────────────────────────────────────────────
-    _sec("credit-card", "Métodos de Pago")
-    resumen_pago = {}
-    for _, row in df_f.iterrows():
-        pago  = str(row.get('Pago', ''))
-        total = float(row['Total'])
-        if '|' in pago:
-            for parte in pago.split('|'):
-                try:
-                    m, monto = parte.split(':')
-                    resumen_pago[m] = resumen_pago.get(m, 0) + float(monto)
-                except ValueError:
-                    pass
-        else:
-            metodo = pago.split(':')[0] if ':' in pago else pago
-            resumen_pago[metodo] = resumen_pago.get(metodo, 0) + total
+    with c5:
+        resumen_pago = {}
+        for _, row in df_f.iterrows():
+            pago  = str(row.get('Pago', ''))
+            total = float(row['Total'])
+            if '|' in pago:
+                for parte in pago.split('|'):
+                    try:
+                        m, monto = parte.split(':')
+                        resumen_pago[m] = resumen_pago.get(m, 0) + float(monto)
+                    except ValueError:
+                        pass
+            else:
+                resumen_pago[pago.split(':')[0] if ':' in pago else pago] = \
+                    resumen_pago.get(pago.split(':')[0] if ':' in pago else pago, 0) + total
 
-    if resumen_pago:
-        df_pago = pd.DataFrame([{"Método": k, "Total": v}
-                                 for k, v in sorted(resumen_pago.items(),
-                                                    key=lambda x: -x[1])])
-        total_pago = df_pago['Total'].sum()
-
-        col_m1, col_m2 = st.columns([1, 1.4])
-        with col_m1:
-            colores_pago = {
-                'Efectivo': '#3fb950', 'Yape':    '#a371f7',
-                'Tarjeta':  '#58a6ff', 'Mixto':   '#d29922',
-            }
-            cards = "<div style='display:flex;flex-direction:column;gap:10px;'>"
-            for _, r in df_pago.iterrows():
-                pct   = r['Total'] / total_pago * 100 if total_pago > 0 else 0
-                color = colores_pago.get(r['Método'], '#8b949e')
-                cards += f"""
-<div style='background:#0d1117;border:1px solid #21262d;border-radius:12px;
-            padding:14px 16px;display:flex;justify-content:space-between;align-items:center;'>
-  <div style='display:flex;align-items:center;gap:10px;'>
-    <div style='width:10px;height:10px;border-radius:50%;background:{color};'></div>
-    <div style='font-size:13px;font-weight:700;color:#c9d1d9;font-family:Outfit,sans-serif;'>{r['Método']}</div>
-  </div>
-  <div style='text-align:right;'>
-    <div style='font-size:15px;font-weight:900;color:#e6edf3;font-family:Outfit,sans-serif;'>S/ {r['Total']:,.2f}</div>
-    <div style='font-size:10px;color:#6e7681;font-family:Outfit,sans-serif;'>{pct:.1f}%</div>
-  </div>
-</div>"""
-            cards += "</div>"
-            st.html(cards)
-
-        with col_m2:
-            fig = px.pie(df_pago, values='Total', names='Método', hole=0.6,
+        if resumen_pago:
+            df_pago     = pd.DataFrame([{"Método": k, "Total": v} for k, v in resumen_pago.items()])
+            total_pago  = df_pago['Total'].sum()
+            fig = px.pie(df_pago, values='Total', names='Método', hole=0.55,
                          color='Método',
-                         color_discrete_map={
-                             'Efectivo': '#3fb950', 'Yape': '#a371f7',
-                             'Tarjeta': '#58a6ff',
-                         })
+                         color_discrete_map={'Efectivo':'#3fb950','Yape':'#a371f7','Tarjeta':'#58a6ff'})
             fig.update_traces(
-                textposition='inside', textinfo='percent',
-                textfont=dict(color='#ffffff', family='Outfit', size=12),
+                textposition='inside', textinfo='percent+label',
+                textfont=dict(color='#ffffff', family='Outfit', size=11),
                 marker=dict(line=dict(color=_BG, width=3)),
                 hovertemplate='<b>%{label}</b><br>S/ %{value:,.2f}<extra></extra>',
             )
-            fig.update_layout(
-                annotations=[dict(
-                    text=f"<b>S/ {total_pago:,.0f}</b>",
-                    x=0.5, y=0.5, font_size=15, showarrow=False,
-                    font=dict(color='#e6edf3', family='Outfit'),
-                )]
-            )
-            st.plotly_chart(_dark(fig, "Composición de Pagos"), use_container_width=True)
+            fig.update_layout(annotations=[dict(
+                text=f"<b>S/{total_pago:,.0f}</b>",
+                x=0.5, y=0.5, font_size=13, showarrow=False,
+                font=dict(color='#e6edf3', family='Outfit'),
+            )])
+            st.plotly_chart(_dark(fig, "Método de Pago"), use_container_width=True)
+
+    # ── TOP CLIENTES ───────────────────────────────────────────────────────────
+    _sec("users", "Mejores Clientes")
+    mask_anon = df_f['Cliente'].str.contains('SALON|CB000|CLIENTE', case=False, na=False)
+    df_top = (df_f[~mask_anon].groupby('Cliente')['Total'].sum()
+              .reset_index().sort_values('Total', ascending=True).tail(8))
+    if not df_top.empty:
+        fig = px.bar(df_top, x='Total', y='Cliente', orientation='h',
+                     text_auto='.2s',
+                     color='Total',
+                     color_continuous_scale=[[0,'#3d2800'],[0.5,'#7d5a00'],[1,'#d29922']])
+        fig.update_traces(textfont=dict(color='#e6edf3', family='Outfit'),
+                          marker_line_width=0,
+                          hovertemplate='<b>%{y}</b><br>S/ %{x:,.2f}<extra></extra>')
+        fig.update_coloraxes(showscale=False)
+        fig.update_xaxes(tickprefix="S/ ", title_text="Total Consumido (S/)")
+        fig.update_yaxes(title_text="")
+        st.plotly_chart(_dark(fig, "Top 8 Clientes por Monto"), use_container_width=True)
 
     # ── RANKING DE PRODUCTOS ───────────────────────────────────────────────────
     _sec("trophy", "Ranking de Productos")
@@ -346,11 +391,6 @@ def mostrar_dashboard(df_ventas):
         df_rank['_ing'] = df_rank.apply(
             lambda r: r['Cantidad'] * precios.get(str(r['Producto']).strip().upper(), 0), axis=1
         )
-        df_rank.sort_values('_ing', ascending=False, inplace=True)
-        df_rank['Ingreso'] = df_rank['_ing'].apply(lambda x: f"S/ {x:,.2f}")
-        cols = ['Producto', 'Cantidad', 'Ingreso']
-
-        top5   = df_rank[cols].head(5)
 
         lista_comida = obtener_lista_comida_principal()
         BEBIDAS = ['CHICHA','FANTA','INKA','COCA','AGUA','MARACUYA','CRUSH',
@@ -358,20 +398,38 @@ def mostrar_dashboard(df_ventas):
         def es_comida(p):
             return (p.upper() in lista_comida) if lista_comida else not any(b in p.upper() for b in BEBIDAS)
 
-        bot5 = (df_rank[df_rank['Producto'].apply(es_comida) & (df_rank['_ing'] > 0)]
-                [cols].tail(5).iloc[::-1])
+        cp, cq = st.columns(2)
 
-        cb, cw = st.columns(2)
-        with cb:
-            st.html("<p style='font-size:11px;font-weight:800;color:#3fb950;"
-                    "letter-spacing:1px;font-family:Outfit,sans-serif;margin:0 0 8px;'>"
-                    "▲  TOP 5 — MAYOR INGRESO</p>")
-            st.dataframe(top5, hide_index=True, use_container_width=True)
-        with cw:
-            st.html("<p style='font-size:11px;font-weight:800;color:#E63946;"
-                    "letter-spacing:1px;font-family:Outfit,sans-serif;margin:0 0 8px;'>"
-                    "▼  BOTTOM 5 — MENOR INGRESO</p>")
-            st.dataframe(bot5, hide_index=True, use_container_width=True)
+        with cp:
+            top8 = df_rank.sort_values('_ing', ascending=True).tail(8).copy()
+            top8['_lbl'] = top8['_ing'].apply(lambda v: f"S/{v:,.0f}")
+            fig  = px.bar(top8, x='_ing', y='Producto', orientation='h',
+                          text='_lbl', custom_data=['Cantidad'],
+                          color='_ing',
+                          color_continuous_scale=[[0,'#0d3320'],[0.5,'#1a6640'],[1,'#39d353']])
+            fig.update_traces(textfont=dict(color='#e6edf3', family='Outfit', size=11),
+                              marker_line_width=0,
+                              hovertemplate='<b>%{y}</b><br>Cantidad: %{customdata[0]}<extra></extra>')
+            fig.update_coloraxes(showscale=False)
+            fig.update_xaxes(tickprefix="S/ ", title_text="Ingreso Estimado (S/)")
+            fig.update_yaxes(title_text="")
+            st.plotly_chart(_dark(fig, "Top 8 — Mayor Ingreso"), use_container_width=True)
+
+        with cq:
+            df_comida = df_rank[df_rank['Producto'].apply(es_comida) & (df_rank['_ing'] > 0)]
+            bot8 = df_comida.sort_values('_ing', ascending=False).tail(8).sort_values('_ing').copy()
+            bot8['_lbl'] = bot8['_ing'].apply(lambda v: f"S/{v:,.0f}")
+            fig  = px.bar(bot8, x='_ing', y='Producto', orientation='h',
+                          text='_lbl', custom_data=['Cantidad'],
+                          color='_ing',
+                          color_continuous_scale=[[0,_RED],[0.5,'#a50d1a'],[1,'#3d0709']])
+            fig.update_traces(textfont=dict(color='#e6edf3', family='Outfit', size=11),
+                              marker_line_width=0,
+                              hovertemplate='<b>%{y}</b><br>Cantidad: %{customdata[0]}<extra></extra>')
+            fig.update_coloraxes(showscale=False)
+            fig.update_xaxes(tickprefix="S/ ", title_text="Ingreso Estimado (S/)")
+            fig.update_yaxes(title_text="")
+            st.plotly_chart(_dark(fig, "Bottom 8 — Menor Ingreso"), use_container_width=True)
 
     except Exception as e:
         st.error(f"Error en ranking de productos: {e}")

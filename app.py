@@ -30,6 +30,29 @@ st.set_page_config(
 # ═══════════════════════════════════════════════════════
 components.html("""
 <script>
+var NAV_ICONS = {
+    'Nueva Venta':     'fa-cash-register',
+    'Cierre de Caja':  'fa-vault',
+    'Dashboard':       'fa-chart-line',
+    'Admin Productos': 'fa-box-open',
+    'Admin Clientes':  'fa-users',
+    'Gestionar Ventas':'fa-pen-to-square'
+};
+function injectNavIcons() {
+    try {
+        var doc = window.parent.document;
+        var ps = doc.querySelectorAll('[data-testid="stSidebar"] .stRadio p');
+        ps.forEach(function(p) {
+            var txt = p.innerText.trim();
+            if (NAV_ICONS[txt] && !p.querySelector('i')) {
+                var ic = doc.createElement('i');
+                ic.className = 'fa-solid ' + NAV_ICONS[txt];
+                ic.style.cssText = 'margin-right:10px;width:16px;text-align:center;flex-shrink:0;font-size:13px;';
+                p.insertBefore(ic, p.firstChild);
+            }
+        });
+    } catch(e) {}
+}
 function lockSidebar() {
     try {
         var doc = window.parent.document;
@@ -49,7 +72,8 @@ function lockSidebar() {
     } catch(e) {}
 }
 lockSidebar();
-setInterval(lockSidebar, 300);
+injectNavIcons();
+setInterval(function(){ lockSidebar(); injectNavIcons(); }, 300);
 </script>
 """, height=0, scrolling=False)
 
@@ -106,7 +130,7 @@ section[data-testid="stSidebar"] .stRadio [role="radiogroup"] label > div:first-
 /* Ocultar label del radio ("nav") */
 section[data-testid="stSidebar"] .stRadio > label { display: none !important; }
 section[data-testid="stSidebar"] .stRadio input[type="radio"] { display: none !important; }
-section[data-testid="stSidebar"] .stRadio p { font-size: 14px !important; font-weight: 600 !important; }
+section[data-testid="stSidebar"] .stRadio p { font-size: 14px !important; font-weight: 600 !important; display: flex !important; align-items: center !important; margin: 0 !important; }
 section[data-testid="stSidebar"] .stRadio label {
     display: flex !important;
     align-items: center !important;
@@ -396,7 +420,7 @@ def _paginar(tabla, columnas="*", filtros=None):
         if filtros:
             for col, val in filtros.items():
                 q = q.gte(col, val) if isinstance(val, tuple) else q.eq(col, val)
-        batch = q.range(off, off + 999).execute().data
+        batch = q.order("id").range(off, off + 999).execute().data
         if not batch:
             break
         rows.extend(batch)
@@ -408,10 +432,27 @@ def _paginar(tabla, columnas="*", filtros=None):
 @st.cache_data(ttl=20)
 def obtener_datos_ventas():
     try:
-        ventas = _paginar("ventas")
+        sb  = get_supabase()
+        # Cargar ventas DESC por fecha → los más recientes llegan en la página 1
+        ventas, off = [], 0
+        while True:
+            batch = (sb.table("ventas").select("*")
+                       .order("fecha", desc=True)
+                       .range(off, off + 999)
+                       .execute().data)
+            if not batch:
+                break
+            ventas.extend(batch)
+            if len(batch) < 1000:
+                break
+            off += 1000
+
         if not ventas:
             return pd.DataFrame()
         df = pd.DataFrame(ventas)
+        if "anulada" in df.columns:
+            df = df[df["anulada"] != True]
+
         items_rows = _paginar("venta_items", "venta_id, producto")
         if items_rows:
             items_df      = pd.DataFrame(items_rows)
@@ -425,9 +466,6 @@ def obtener_datos_ventas():
             "tipo": "Tipo", "total": "Total", "metodo": "Pago",
             "direccion": "Direccion", "celular": "Celular",
         })
-        # Excluir anuladas de totales y analytics
-        if "anulada" in df.columns:
-            df = df[df["anulada"] != True]
         return df
     except:
         return pd.DataFrame()
@@ -677,8 +715,8 @@ with st.sidebar:
                 unsafe_allow_html=True)
 
     modo = "Venta"
-    opciones_piero    = ["💰  Nueva Venta", "🏦  Cierre de Caja", "📈  Dashboard", "🛠️  Admin Productos", "👥  Admin Clientes", "✏️  Gestionar Ventas"]
-    opciones_cajero   = ["💰  Nueva Venta", "🏦  Cierre de Caja", "✏️  Gestionar Ventas"]
+    opciones_piero    = ["Nueva Venta", "Cierre de Caja", "Dashboard", "Admin Productos", "Admin Clientes", "Gestionar Ventas"]
+    opciones_cajero   = ["Nueva Venta", "Cierre de Caja", "Gestionar Ventas"]
 
     if usuario == "piero":
         modo = st.radio("nav", opciones_piero,  label_visibility="hidden")
@@ -801,7 +839,7 @@ def seccion_header(titulo, subtitulo, icon=None):
 # ══════════════════════════════════════════════════════════════
 #  VISTA: NUEVA VENTA
 # ══════════════════════════════════════════════════════════════
-if modo in ("💰  Nueva Venta", "Venta"):
+if modo in ("Nueva Venta", "Venta"):
     seccion_header("Nueva Venta", "Registra el pedido del cliente", icon="fa-cash-register")
 
     col_menu, col_ticket = st.columns([1.7, 1])
@@ -1104,7 +1142,7 @@ if modo in ("💰  Nueva Venta", "Venta"):
 # ══════════════════════════════════════════════════════════════
 #  VISTA: CIERRE DE CAJA
 # ══════════════════════════════════════════════════════════════
-elif modo == "🏦  Cierre de Caja":
+elif modo == "Cierre de Caja":
     seccion_header("Cierre de Caja", "Control diario de ventas y movimientos", icon="fa-vault")
 
     c_btn, c_fec = st.columns([1, 2])
@@ -1155,14 +1193,14 @@ elif modo == "🏦  Cierre de Caja":
 # ══════════════════════════════════════════════════════════════
 #  VISTA: DASHBOARD
 # ══════════════════════════════════════════════════════════════
-elif modo == "📈  Dashboard":
+elif modo == "Dashboard":
     df_ventas = obtener_datos_ventas()
     dashboard.mostrar_dashboard(df_ventas)
 
 # ══════════════════════════════════════════════════════════════
 #  VISTA: ADMIN PRODUCTOS  (solo piero)
 # ══════════════════════════════════════════════════════════════
-elif modo == "🛠️  Admin Productos":
+elif modo == "Admin Productos":
     seccion_header("Admin Productos", "Gestiona el catálogo de productos", icon="fa-sliders")
     sb = get_supabase()
 
@@ -1243,7 +1281,7 @@ elif modo == "🛠️  Admin Productos":
 # ══════════════════════════════════════════════════════════════
 #  VISTA: ADMIN CLIENTES  (solo piero)
 # ══════════════════════════════════════════════════════════════
-elif modo == "👥  Admin Clientes":
+elif modo == "Admin Clientes":
     seccion_header("Admin Clientes", "Gestiona la base de clientes", icon="fa-users")
     sb = get_supabase()
 
@@ -1331,7 +1369,7 @@ elif modo == "👥  Admin Clientes":
 # ══════════════════════════════════════════════════════════════
 #  VISTA: GESTIONAR VENTAS  (piero: cualquier día / giusseppe: solo hoy)
 # ══════════════════════════════════════════════════════════════
-elif modo == "✏️  Gestionar Ventas":
+elif modo == "Gestionar Ventas":
     seccion_header("Gestionar Ventas", "Anula o edita ventas registradas", icon="fa-pen-to-square")
     sb = get_supabase()
 
