@@ -27,13 +27,14 @@ Sistema de punto de venta (POS) desarrollado para un restaurante de comida rápi
 
 ### 📊 Dashboard Analítico
 - KPIs: ingresos totales, pedidos, ticket promedio, horario punta
-- Tendencia de ingresos diaria (gráfico de área)
+- Tendencia de ingresos: barras por día (filtro mensual) o por mes (sin filtro mensual)
 - Demanda por bloques horarios (18 PM – 1 AM)
-- Distribución por canal (mesa vs. call center)
-- Top 5 clientes por monto
-- Ranking de productos (mayor y menor ingreso)
+- Distribución por canal y por día de semana (Lun–Dom)
+- Top 8 clientes por monto consumido
+- Ranking de productos: Top 8 mayor ingreso / Bottom 8 menor ingreso (con cantidad al pasar el cursor)
 - Desglose de ingresos por método de pago
-- Filtros por fecha, canal, cliente y producto
+- Filtros desplegables en cascada: Año → Mes → Semana (Lun–Dom) → Canal → Cliente → Producto
+- Semanas definidas como Lunes–Domingo según el calendario real del mes
 
 ### ⚙️ Administración
 - Gestión de productos: precios, activar/desactivar, agregar
@@ -110,3 +111,6 @@ streamlit run app.py
 - **Búsqueda de clientes sin caché** — consulta directa a Supabase con `ilike` para garantizar datos siempre frescos.
 - **`@st.cache_data` con TTL diferenciado** — 300s para productos, 20s para ventas, sin caché en búsquedas puntuales.
 - **Material Symbols override** — el CSS global `* { font-family: Outfit }` rompe los íconos internos de Streamlit 1.54; se restaura con selector específico `[data-testid="stIconMaterial"]`.
+- **Paginación DESC en ventas** — `obtener_datos_ventas()` ordena por `fecha DESC` para que los registros más recientes lleguen en la primera página, evitando pérdida de datos nuevos si la paginación se corta.
+- **Extracción de fecha y hora desde string crudo** — `str.slice(0,10)` para fecha y `str.slice(11,13)` para hora, en lugar de `pd.to_datetime().dt.*`. Evita que registros con timezone offset queden como NaT y rompan la fecha, el gráfico de horarios y el KPI de horario punta.
+- **Iconos sidebar via Font Awesome + JS** — navegación con íconos FA inyectados por `injectNavIcons()`, consistentes con el resto de la UI sin depender de emojis.

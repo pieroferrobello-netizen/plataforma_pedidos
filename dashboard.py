@@ -105,13 +105,11 @@ def mostrar_dashboard(df_ventas):
     # ── ETL ──────────────────────────────────────────────────────────────────
     df = df_ventas.copy()
     df['Total']          = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
-    df['Fecha_Completa'] = pd.to_datetime(df['Fecha'], errors='coerce')
-    # Extraer fecha igual que cierre de caja (primeros 10 chars del string crudo)
-    # evita que timezone offsets desplacen la fecha al día siguiente
-    df['Fecha_Corta']    = pd.to_datetime(
-        df['Fecha'].astype(str).str.slice(0, 10), errors='coerce'
-    ).dt.date
-    df['Hora']           = df['Fecha_Completa'].dt.hour
+    # Extraer fecha y hora directo del string crudo (chars 0-9 = fecha, 11-12 = hora)
+    # evita que timezone offsets causen NaT en pd.to_datetime y rompan Hora/Bloque
+    _raw                 = df['Fecha'].astype(str)
+    df['Fecha_Corta']    = pd.to_datetime(_raw.str.slice(0, 10), errors='coerce').dt.date
+    df['Hora']           = pd.to_numeric(_raw.str.slice(11, 13), errors='coerce').fillna(0).astype(int)
     df = df.dropna(subset=['Fecha_Corta'])
 
     df['_Año']    = df['Fecha_Corta'].apply(lambda d: d.year)
@@ -173,8 +171,8 @@ def mostrar_dashboard(df_ventas):
         f_sem_str = st.selectbox("Semana", sem_opciones, index=0)
 
     with fa4:
-        canales   = df['Canal'].unique().tolist()
-        f_canal   = st.multiselect("Canal", canales, default=canales)
+        canales   = sorted(df['Canal'].dropna().unique().tolist())
+        f_canal   = st.selectbox("Canal", ["Todos"] + canales, index=0)
     with fa5:
         clientes  = sorted(df['Cliente'].dropna().astype(str).unique())
         f_cliente = st.multiselect("Cliente", clientes)
@@ -191,8 +189,8 @@ def mostrar_dashboard(df_ventas):
     if f_sem_str != "Todas":
         f_sem_num = int(f_sem_str.split()[1])
         df_f = df_f[df_f['_Semana'] == f_sem_num]
-    if f_canal:
-        df_f = df_f[df_f['Canal'].isin(f_canal)]
+    if f_canal != "Todos":
+        df_f = df_f[df_f['Canal'] == f_canal]
     if f_cliente:
         df_f = df_f[df_f['Cliente'].isin(f_cliente)]
     if f_prod:
@@ -256,7 +254,7 @@ def mostrar_dashboard(df_ventas):
             df_tend = (df_f.groupby('Fecha_Corta')
                        .agg(Total=('Total','sum'), Pedidos=('Total','count'))
                        .reset_index().sort_values('Fecha_Corta'))
-            df_tend['Fecha_str'] = df_tend['Fecha_Corta'].astype(str).str.slice(5)
+            df_tend['Fecha_str'] = df_tend['Fecha_Corta'].apply(lambda d: f"{d.day:02d}/{d.month:02d}")
             x_vals   = df_tend['Fecha_str'].tolist()
             titulo_c = "Ingresos Diarios"
             lbl_desg = 'Fecha'
@@ -269,7 +267,7 @@ def mostrar_dashboard(df_ventas):
             textfont=dict(color='#8b949e', family='Outfit', size=9),
             hovertemplate='<b>%{x}</b><br>S/ %{y:,.2f}<extra></extra>',
         ))
-        fig.update_xaxes(tickangle=-45)
+        fig.update_xaxes(tickangle=-45, type='category')
         fig.update_yaxes(tickprefix="S/ ")
         fig.update_layout(uniformtext_minsize=7, uniformtext_mode='hide')
         st.plotly_chart(_dark(fig, titulo_c), use_container_width=True)
