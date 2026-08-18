@@ -9,7 +9,7 @@ import dashboard
 from collections import Counter
 
 # ── CONFIG IMPRESORA TÉRMICA ─────────────────────────────
-PRINTER_IP   = "192.168.18.XXX"   # ← cambiar a la IP real de la XP-80CW una vez configurada
+PRINTER_IP   = "192.168.18.154"   # CBX-POS87 — IP asignada por DHCP del router
 PRINTER_PORT = 9100
 
 try:
