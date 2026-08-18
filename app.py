@@ -177,32 +177,38 @@ section[data-testid="stSidebar"] div.stButton > button:hover {
     box-shadow: none !important;
 }
 
-/* ════ TABS ════ */
-.stTabs [data-baseweb="tab-list"] {
+/* ════ CATEGORÍAS MENÚ (radio horizontal) ════ */
+.main [data-testid="stRadio"] > div[role="radiogroup"] {
     background: #0a0d13;
     border-radius: 16px;
     padding: 5px;
     gap: 3px;
     border: 1px solid #1c2128;
 }
-.stTabs [data-baseweb="tab"] {
-    border-radius: 12px;
+/* ── Radio categorías menú: ocultar círculos, estilizar como pills ── */
+div[data-testid="stRadio"] [data-testid="stWidgetLabel"] { display: none !important; }
+div[role="radiogroup"] input[type="radio"]                { display: none !important; }
+div[role="radiogroup"] label > div:first-child            { display: none !important; }
+div[role="radiogroup"] label {
+    border-radius: 12px !important;
     color: #484f58 !important;
-    font-weight: 800;
-    font-size: 11px;
-    padding: 9px 14px;
-    letter-spacing: 0.8px;
-    white-space: nowrap;
-    text-transform: uppercase;
-    transition: color 0.15s;
+    font-weight: 800 !important;
+    font-size: 11px !important;
+    padding: 9px 14px !important;
+    letter-spacing: 0.8px !important;
+    white-space: nowrap !important;
+    text-transform: uppercase !important;
+    transition: color 0.15s !important;
+    cursor: pointer !important;
+    border: 1px solid transparent !important;
 }
-.stTabs [data-baseweb="tab"]:hover { color: #8b949e !important; }
-.stTabs [aria-selected="true"] {
+div[role="radiogroup"] label:hover { color: #8b949e !important; }
+div[role="radiogroup"] label:has(input:checked) {
     background: linear-gradient(135deg, #E63946, #a50d1a) !important;
     color: white !important;
-    box-shadow: 0 4px 16px rgba(230,57,70,0.5);
-    letter-spacing: 1px;
+    box-shadow: 0 4px 16px rgba(230,57,70,0.5) !important;
 }
+/* Mantener stTabs para Admin */
 .stTabs [data-baseweb="tab-highlight"] { display: none; }
 .stTabs [data-baseweb="tab-border"]    { display: none; }
 
@@ -845,13 +851,13 @@ if modo in ("Nueva Venta", "Venta"):
     col_menu, col_ticket = st.columns([1.7, 1])
 
     with col_menu:
-        t1,t2,t3,t4,t5,t6,t7,t8,t9 = st.tabs([
-            "🔥 BROAST","🍔 BURGERS","🌭 SALCHI","🍕 PIZZA",
-            "🍽️ CARTA","🧊 GASEOSAS","🍹 REFRESCOS","☕ CAFÉ","⭐ EXTRAS"
-        ])
+        cat = st.radio("cat",
+            ["🔥 BROAST","🍔 BURGERS","🌭 SALCHI","🍕 PIZZA",
+             "🍽️ CARTA","🧊 GASEOSAS","🍹 REFRESCOS","☕ CAFÉ","⭐ EXTRAS"],
+            horizontal=True, label_visibility="hidden", key="cat_menu")
 
         # BROASTERS
-        with t1:
+        if cat == "🔥 BROAST":
             banner_categoria('BROASTERS')
             c1, c2 = st.columns(2)
             with c1: arroz    = st.checkbox("🍚 Con Arroz",    value=True, key="bro_arr")
@@ -871,7 +877,7 @@ if modo in ("Nueva Venta", "Venta"):
                         agregar_item(f"{row['PRODUCTO']} ({ac})", row['PRECIO'])
 
         # HAMBURGUESAS
-        with t2:
+        elif cat == "🍔 BURGERS":
             banner_categoria('HAMBURGUESAS')
             st.markdown("<p style='font-size:12px; color:#484f58; margin:-6px 0 8px;'>"
                         "Incluye papas al hilo</p>", unsafe_allow_html=True)
@@ -891,7 +897,7 @@ if modo in ("Nueva Venta", "Venta"):
                         agregar_item(f"{row['PRODUCTO']}{ex}{cr}", row['PRECIO'])
 
         # SALCHIPAPAS
-        with t3:
+        elif cat == "🌭 SALCHI":
             banner_categoria('SALCHIPAPAS')
             c1, c2 = st.columns(2)
             with c1: arroz    = st.checkbox("🍚 Con Arroz",    value=True, key="sal_arr")
@@ -910,10 +916,11 @@ if modo in ("Nueva Venta", "Venta"):
                                  key=f"s_{i}", use_container_width=True):
                         agregar_item(row['PRODUCTO'] + (f" ({ac})" if ac else ""), row['PRECIO'])
 
-        with t4: botones_simples('PIZZAS', 'piz')
+        elif cat == "🍕 PIZZA":
+            botones_simples('PIZZAS', 'piz')
 
         # CARTA
-        with t5:
+        elif cat == "🍽️ CARTA":
             banner_categoria('CARTA')
             c1, c2 = st.columns(2)
             with c1: arroz    = st.checkbox("🍚 Con Arroz",    value=True, key="car_arr")
@@ -936,10 +943,10 @@ if modo in ("Nueva Venta", "Venta"):
                                      key=f"c_{i}", use_container_width=True):
                             agregar_item(f"{row['PRODUCTO']}{txt}", row['PRECIO'])
 
-        with t6: botones_simples('GASEOSAS',   'gas')
-        with t7: botones_simples('REFRESCOS',  'ref')
-        with t8: botones_simples('INFUSIONES', 'inf')
-        with t9: botones_simples('EXTRAS',     'ext')
+        elif cat == "🧊 GASEOSAS":  botones_simples('GASEOSAS',   'gas')
+        elif cat == "🍹 REFRESCOS": botones_simples('REFRESCOS',  'ref')
+        elif cat == "☕ CAFÉ":      botones_simples('INFUSIONES', 'inf')
+        elif cat == "⭐ EXTRAS":    botones_simples('EXTRAS',     'ext')
 
     # ══ PANEL PEDIDO ══
     with col_ticket:
