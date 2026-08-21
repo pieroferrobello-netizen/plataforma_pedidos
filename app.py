@@ -510,7 +510,7 @@ def guardar_venta(usuario, cliente, tipo, total, direccion, celular, metodo, ite
         return None
 
 
-def imprimir_ticket_cocina(venta_id, cliente, tipo, items, direccion="", celular=""):
+def imprimir_ticket_cocina(venta_id, cliente, tipo, items, direccion="", celular="", metodo="", total=0):
     """Envía ticket de cocina a la impresora térmica via WiFi. Retorna True o mensaje de error."""
     if not _ESCPOS_OK:
         return "python-escpos no instalado — ejecuta: pip install python-escpos"
@@ -562,6 +562,9 @@ def imprimir_ticket_cocina(venta_id, cliente, tipo, items, direccion="", celular
                     resto = resto[38:]
 
         p.set(bold=False)
+        p.text(sep + "\n")
+        p.text(f" TOTAL:   S/ {total:.2f}\n")
+        p.text(f" PAGO:    {metodo}\n")
         p.text(SEP + "\n")
         p.set(align='center')
         p.text("\n\n\n")
@@ -1128,6 +1131,8 @@ if modo in ("Nueva Venta", "Venta"):
                                     items     = st.session_state.pedido,
                                     direccion = direccion_str,
                                     celular   = celular_str,
+                                    metodo    = metodo,
+                                    total     = total_final,
                                 )
                                 if res_print is True:
                                     st.toast("🖨️  Ticket enviado a cocina")
