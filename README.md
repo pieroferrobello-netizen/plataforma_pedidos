@@ -42,6 +42,13 @@ Sistema de punto de venta (POS) desarrollado para un restaurante de comida rápi
 - Anulación y edición de ventas del día
 - Alerta automática de cierre de caja (11 PM – 1 AM)
 
+### 📦 Inventario *(solo admin)*
+- Stock en tiempo real con alerta visual cuando baja del mínimo
+- Descuento automático de stock al confirmar una venta (vinculación producto → inventario por FK)
+- Recepción de mercadería con registro de entrada
+- Historial de movimientos: ventas, entradas y ajustes manuales
+- Exportación a CSV para inventario físico
+
 ### 🖨️ Ticket de Cocina *(en integración)*
 - Impresión automática vía WiFi al confirmar pedido
 - Formato ESC/POS con productos agrupados y acompañamientos
@@ -73,10 +80,12 @@ requirements.txt
 
 **Base de datos (Supabase / PostgreSQL):**
 ```
-ventas        → Cabecera de cada pedido (fecha, cliente, total, método, anulada)
-venta_items   → Detalle de productos por pedido (FK → ventas)
-productos     → Catálogo con precio, categoría y estado activo
-clientes      → Base de clientes con dirección y celular
+ventas               → Cabecera de cada pedido (fecha, cliente, total, método, anulada)
+venta_items          → Detalle de productos por pedido (FK → ventas)
+productos            → Catálogo con precio, categoría, estado activo e inventario_id (FK → inventario)
+clientes             → Base de clientes con dirección y celular
+inventario           → Stock de insumos con stock mínimo y unidad
+inventario_movimientos → Historial de entradas, ventas y ajustes (FK → inventario)
 ```
 
 **Historial migrado:** 2.872 ventas + 6.864 ítems desde Google Sheets (Feb – Jun 2026)
