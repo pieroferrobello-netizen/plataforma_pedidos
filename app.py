@@ -514,6 +514,10 @@ def guardar_venta(usuario, cliente, tipo, total, direccion, celular, metodo, ite
                 inv = sb.table("inventario").select("id,stock").eq("id", inv_id).execute().data
                 if inv:
                     sb.table("inventario").update({"stock": max(0, inv[0]["stock"] - 1)}).eq("id", inv_id).execute()
+                    sb.table("inventario_movimientos").insert({
+                        "inventario_id": inv_id, "tipo": "venta", "cantidad": -1,
+                        "nota": f"Venta #{venta_id}"
+                    }).execute()
         return venta_id
     except Exception as e:
         st.error(f"Error guardando venta: {e}")
@@ -1416,18 +1420,32 @@ elif modo == "Inventario":
         else:
             st.success("✅ Todo el stock está en niveles normales")
 
-    tab_stock, tab_vincular, tab_nuevo = st.tabs(["📦  Stock actual", "🔗  Vincular productos", "➕  Agregar item"])
+    tab_stock, tab_recibir, tab_historial, tab_vincular, tab_nuevo = st.tabs([
+        "📦  Stock actual", "📥  Recibir stock", "📋  Historial", "🔗  Vincular productos", "➕  Agregar item"
+    ])
 
     with tab_stock:
         df_inv2 = _inv_cargar()
         if df_inv2.empty:
             st.info("No hay items en inventario.")
         else:
-            cats = ["Todas"] + sorted(df_inv2["categoria"].unique().tolist())
-            cat_sel = st.selectbox("Categoría", cats, key="inv_cat")
+            col_fil, col_exp = st.columns([3, 1])
+            with col_fil:
+                cats = ["Todas"] + sorted(df_inv2["categoria"].unique().tolist())
+                cat_sel = st.selectbox("Categoría", cats, key="inv_cat")
+            with col_exp:
+                df_export = df_inv2[["nombre","categoria","stock","stock_minimo","unidad"]].copy()
+                df_export.columns = ["Producto","Categoría","Stock","Stock Mín.","Unidad"]
+                csv = df_export.to_csv(index=False).encode("utf-8")
+                st.download_button("⬇️ Exportar", csv, "inventario.csv", "text/csv",
+                                   use_container_width=True)
+
             df_vista = df_inv2 if cat_sel == "Todas" else df_inv2[df_inv2["categoria"] == cat_sel]
 
             for _, row in df_vista.iterrows():
+                color = "#E63946" if int(row["stock"]) < int(row["stock_minimo"]) else "#1c2128"
+                st.markdown(f"<div style='border-left:3px solid {color};padding-left:8px;margin-bottom:4px'>",
+                            unsafe_allow_html=True)
                 col_info, col_stock, col_min, col_act, col_del = st.columns([3, 1.5, 1.5, 1.2, 0.8])
                 with col_info:
                     st.markdown(f"**{row['nombre']}**")
@@ -1439,7 +1457,12 @@ elif modo == "Inventario":
                     )
                     if nuevo_stock != int(row["stock"]):
                         if st.button("💾", key=f"sv_stk_{row['id']}", help="Guardar stock"):
+                            diff = nuevo_stock - int(row["stock"])
                             sb.table("inventario").update({"stock": nuevo_stock}).eq("id", row["id"]).execute()
+                            sb.table("inventario_movimientos").insert({
+                                "inventario_id": int(row["id"]), "tipo": "ajuste",
+                                "cantidad": diff, "nota": "Ajuste manual"
+                            }).execute()
                             st.cache_data.clear(); st.rerun()
                 with col_min:
                     nuevo_min = st.number_input(
@@ -1459,7 +1482,67 @@ elif modo == "Inventario":
                     if st.button("🗑️", key=f"inv_del_{row['id']}", help="Eliminar"):
                         sb.table("inventario").delete().eq("id", row["id"]).execute()
                         st.cache_data.clear(); st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
                 st.divider()
+
+    with tab_recibir:
+        st.caption("Registra una entrada de mercadería para actualizar el stock.")
+        df_inv_r = _inv_cargar()
+        with st.form("form_recibir", clear_on_submit=True):
+            opciones_r = {f"{r['nombre']} ({r['categoria']})": int(r["id"]) for _, r in df_inv_r.iterrows()}
+            sel_r   = st.selectbox("Producto", list(opciones_r.keys()))
+            cant_r  = st.number_input("Cantidad recibida", min_value=1, step=1, value=1)
+            nota_r  = st.text_input("Nota (opcional, ej: Proveedor X)")
+            sub_r   = st.form_submit_button("✅ Registrar entrada", type="primary", use_container_width=True)
+            if sub_r:
+                inv_id_r = opciones_r[sel_r]
+                inv_row  = sb.table("inventario").select("stock").eq("id", inv_id_r).execute().data
+                if inv_row:
+                    nuevo_s = inv_row[0]["stock"] + cant_r
+                    sb.table("inventario").update({"stock": nuevo_s}).eq("id", inv_id_r).execute()
+                    sb.table("inventario_movimientos").insert({
+                        "inventario_id": inv_id_r, "tipo": "entrada",
+                        "cantidad": cant_r, "nota": nota_r or None
+                    }).execute()
+                    st.cache_data.clear()
+                    st.success(f"✅ +{cant_r} unidades registradas. Stock actual: {nuevo_s}")
+                    st.rerun()
+
+    with tab_historial:
+        @st.cache_data(ttl=10)
+        def _inv_historial():
+            rows = sb.table("inventario_movimientos").select(
+                "id,tipo,cantidad,nota,fecha,inventario_id,inventario(nombre)"
+            ).order("fecha", desc=True).limit(200).execute().data
+            return rows
+
+        movs = _inv_historial()
+        if not movs:
+            st.info("Sin movimientos registrados aún.")
+        else:
+            TIPO_COLOR = {"entrada": "#2ea043", "venta": "#E63946", "ajuste": "#d29922"}
+            TIPO_LABEL = {"entrada": "📥 Entrada", "venta": "🛒 Venta", "ajuste": "✏️ Ajuste"}
+            for m in movs:
+                nombre_inv = m.get("inventario", {}).get("nombre", "—") if m.get("inventario") else "—"
+                tipo  = m.get("tipo", "")
+                color = TIPO_COLOR.get(tipo, "#484f58")
+                label = TIPO_LABEL.get(tipo, tipo)
+                fecha_str = str(m.get("fecha",""))[:16].replace("T"," ")
+                signo = "+" if tipo == "entrada" else ("-" if tipo == "venta" else ("+" if m["cantidad"] > 0 else ""))
+                st.markdown(f"""
+                <div style='background:#0d1117;border:1px solid #1c2128;border-left:3px solid {color};
+                            border-radius:8px;padding:8px 12px;margin-bottom:6px;
+                            display:flex;justify-content:space-between;align-items:center'>
+                    <div>
+                        <span style='color:{color};font-weight:700;font-size:12px'>{label}</span>
+                        <span style='color:#e6edf3;margin-left:10px'>{nombre_inv}</span>
+                        <span style='color:#484f58;font-size:12px;margin-left:8px'>{m.get("nota") or ""}</span>
+                    </div>
+                    <div style='text-align:right'>
+                        <span style='color:{color};font-weight:700'>{signo}{abs(m["cantidad"])}</span>
+                        <span style='color:#484f58;font-size:11px;margin-left:10px'>{fecha_str}</span>
+                    </div>
+                </div>""", unsafe_allow_html=True)
 
     with tab_vincular:
         st.caption("Vincula cada producto del menú a su item de inventario para el descuento automático.")
