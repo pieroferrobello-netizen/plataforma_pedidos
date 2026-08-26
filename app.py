@@ -36,6 +36,7 @@ var NAV_ICONS = {
     'Dashboard':       'fa-chart-line',
     'Admin Productos': 'fa-box-open',
     'Admin Clientes':  'fa-users',
+    'Inventario':      'fa-boxes-stacking',
     'Gestionar Ventas':'fa-pen-to-square'
 };
 function injectNavIcons() {
@@ -504,6 +505,15 @@ def guardar_venta(usuario, cliente, tipo, total, direccion, celular, metodo, ite
         item_rows = [{"venta_id": venta_id, "producto": it["Producto"],
                       "precio": it["Precio"]} for it in items]
         sb.table("venta_items").insert(item_rows).execute()
+        # Descontar inventario por inventario_id del producto
+        for it in items:
+            nombre_base = it["Producto"].split(" (")[0].strip()
+            prod = sb.table("productos").select("inventario_id").eq("nombre", nombre_base).execute().data
+            if prod and prod[0].get("inventario_id"):
+                inv_id = prod[0]["inventario_id"]
+                inv = sb.table("inventario").select("id,stock").eq("id", inv_id).execute().data
+                if inv:
+                    sb.table("inventario").update({"stock": max(0, inv[0]["stock"] - 1)}).eq("id", inv_id).execute()
         return venta_id
     except Exception as e:
         st.error(f"Error guardando venta: {e}")
@@ -724,7 +734,7 @@ with st.sidebar:
                 unsafe_allow_html=True)
 
     modo = "Venta"
-    opciones_piero    = ["Nueva Venta", "Cierre de Caja", "Dashboard", "Admin Productos", "Admin Clientes", "Gestionar Ventas"]
+    opciones_piero    = ["Nueva Venta", "Cierre de Caja", "Dashboard", "Admin Productos", "Admin Clientes", "Inventario", "Gestionar Ventas"]
     opciones_cajero   = ["Nueva Venta", "Cierre de Caja", "Gestionar Ventas"]
 
     if usuario == "piero":
@@ -1374,6 +1384,137 @@ elif modo == "Admin Clientes":
                         cargar_datos_supabase.clear()
                         st.cache_data.clear()
                         st.success(f"Cliente '{nc_nombre}' agregado correctamente.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+# ══════════════════════════════════════════════════════════════
+#  VISTA: INVENTARIO  (solo piero)
+# ══════════════════════════════════════════════════════════════
+elif modo == "Inventario":
+    seccion_header("Inventario", "Control de stock en tiempo real", icon="fa-boxes-stacking")
+    sb = get_supabase()
+
+    @st.cache_data(ttl=10)
+    def _inv_cargar():
+        rows = sb.table("inventario").select("*").order("categoria").order("nombre").execute().data
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+    @st.cache_data(ttl=10)
+    def _inv_cargar_productos():
+        rows = sb.table("productos").select("id,nombre,inventario_id").order("nombre").execute().data
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+    df_inv = _inv_cargar()
+
+    # Banner de alertas
+    if not df_inv.empty:
+        bajos = df_inv[(df_inv["stock"] < df_inv["stock_minimo"]) & (df_inv["activo"] == True)]
+        if not bajos.empty:
+            lista = ", ".join(f"**{r['nombre']}** ({r['stock']} {r['unidad']})" for _, r in bajos.iterrows())
+            st.warning(f"⚠️ Stock bajo: {lista}")
+        else:
+            st.success("✅ Todo el stock está en niveles normales")
+
+    tab_stock, tab_vincular, tab_nuevo = st.tabs(["📦  Stock actual", "🔗  Vincular productos", "➕  Agregar item"])
+
+    with tab_stock:
+        df_inv2 = _inv_cargar()
+        if df_inv2.empty:
+            st.info("No hay items en inventario.")
+        else:
+            cats = ["Todas"] + sorted(df_inv2["categoria"].unique().tolist())
+            cat_sel = st.selectbox("Categoría", cats, key="inv_cat")
+            df_vista = df_inv2 if cat_sel == "Todas" else df_inv2[df_inv2["categoria"] == cat_sel]
+
+            for _, row in df_vista.iterrows():
+                col_info, col_stock, col_min, col_act, col_del = st.columns([3, 1.5, 1.5, 1.2, 0.8])
+                with col_info:
+                    st.markdown(f"**{row['nombre']}**")
+                    st.caption(f"{row['categoria']} · {row['unidad']}")
+                with col_stock:
+                    nuevo_stock = st.number_input(
+                        "Stock", value=int(row["stock"]), min_value=0, step=1,
+                        key=f"stk_{row['id']}", label_visibility="collapsed"
+                    )
+                    if nuevo_stock != int(row["stock"]):
+                        if st.button("💾", key=f"sv_stk_{row['id']}", help="Guardar stock"):
+                            sb.table("inventario").update({"stock": nuevo_stock}).eq("id", row["id"]).execute()
+                            st.cache_data.clear(); st.rerun()
+                with col_min:
+                    nuevo_min = st.number_input(
+                        "Mínimo", value=int(row["stock_minimo"]), min_value=0, step=1,
+                        key=f"min_{row['id']}", label_visibility="collapsed"
+                    )
+                    if nuevo_min != int(row["stock_minimo"]):
+                        if st.button("💾", key=f"sv_min_{row['id']}", help="Guardar mínimo"):
+                            sb.table("inventario").update({"stock_minimo": nuevo_min}).eq("id", row["id"]).execute()
+                            st.cache_data.clear(); st.rerun()
+                with col_act:
+                    activo = st.toggle("Activo", value=bool(row["activo"]), key=f"inv_act_{row['id']}")
+                    if activo != bool(row["activo"]):
+                        sb.table("inventario").update({"activo": activo}).eq("id", row["id"]).execute()
+                        st.cache_data.clear(); st.rerun()
+                with col_del:
+                    if st.button("🗑️", key=f"inv_del_{row['id']}", help="Eliminar"):
+                        sb.table("inventario").delete().eq("id", row["id"]).execute()
+                        st.cache_data.clear(); st.rerun()
+                st.divider()
+
+    with tab_vincular:
+        st.caption("Vincula cada producto del menú a su item de inventario para el descuento automático.")
+        df_prods = _inv_cargar_productos()
+        df_inv3  = _inv_cargar()
+        if df_prods.empty:
+            st.info("No hay productos.")
+        else:
+            opciones_inv = {"(Sin vincular)": None}
+            for _, r in df_inv3.iterrows():
+                opciones_inv[f"{r['nombre']} ({r['categoria']})"] = int(r["id"])
+
+            for _, row in df_prods.iterrows():
+                col_n, col_sel = st.columns([3, 3])
+                with col_n:
+                    st.markdown(f"**{row['nombre']}**")
+                with col_sel:
+                    actual = row.get("inventario_id")
+                    idx_actual = 0
+                    for i, v in enumerate(opciones_inv.values()):
+                        if v == actual:
+                            idx_actual = i
+                            break
+                    sel = st.selectbox(
+                        "Inventario", list(opciones_inv.keys()),
+                        index=idx_actual, key=f"vinc_{row['id']}", label_visibility="collapsed"
+                    )
+                    nuevo_id = opciones_inv[sel]
+                    if nuevo_id != actual:
+                        sb.table("productos").update({"inventario_id": nuevo_id}).eq("id", int(row["id"])).execute()
+                        st.cache_data.clear(); st.rerun()
+                st.divider()
+
+    with tab_nuevo:
+        with st.form("form_inv_nuevo", clear_on_submit=True):
+            n_nombre   = st.text_input("Nombre del item (ej: Coca cola 600ml)")
+            n_categoria = st.selectbox("Categoría", ["Gaseosas", "Pollo", "Ingredientes", "Otros"])
+            col_a, col_b = st.columns(2)
+            with col_a:
+                n_stock = st.number_input("Stock inicial", min_value=0, step=1)
+            with col_b:
+                n_min   = st.number_input("Stock mínimo", min_value=0, step=1, value=5)
+            n_unidad = st.selectbox("Unidad", ["und", "botella", "pieza", "kg", "lt", "caja"])
+            sub = st.form_submit_button("Agregar item", type="primary", use_container_width=True)
+            if sub:
+                if not n_nombre:
+                    st.error("El nombre es obligatorio.")
+                else:
+                    try:
+                        sb.table("inventario").insert({
+                            "nombre": n_nombre, "categoria": n_categoria,
+                            "stock": n_stock, "stock_minimo": n_min, "unidad": n_unidad
+                        }).execute()
+                        st.cache_data.clear()
+                        st.success(f"✅ '{n_nombre}' agregado al inventario.")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
