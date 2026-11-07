@@ -9,7 +9,7 @@ import dashboard
 from collections import Counter
 
 # ── CONFIG IMPRESORA TÉRMICA ─────────────────────────────
-PRINTER_IP   = "192.168.18.136"   # CBX-POS87 — IP asignada por DHCP del router
+PRINTER_IP   = "192.168.18.140"   # CBX-POS87 — IP asignada por DHCP del router
 PRINTER_PORT = 9100
 
 try:
